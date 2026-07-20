@@ -46,8 +46,39 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("sunshine-edid-helper")
 
 
+def find_session_env() -> dict:
+    """kscreen-doctor needs the desktop user's Wayland session to connect to KWin
+    at all - this daemon runs as root via a system-level systemd unit, which has
+    none of that, so every kscreen-doctor call would otherwise crash outright
+    (confirmed live: SIGABRT, Qt can't find a display). Auto-detect the running
+    session by finding a wayland-* socket under /run/user/<uid>/ rather than
+    requiring the UID to be hardcoded - overridable via SUNSHINE_EDID_HELPER_UID
+    for multi-user setups where auto-detection would be ambiguous.
+    """
+    override_uid = os.environ.get("SUNSHINE_EDID_HELPER_UID")
+    uid_dirs = [override_uid] if override_uid else os.listdir("/run/user")
+
+    for uid in uid_dirs:
+        runtime_dir = f"/run/user/{uid}"
+        try:
+            sockets = [f for f in os.listdir(runtime_dir) if f.startswith("wayland-") and not f.endswith(".lock")]
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            continue
+        if not sockets:
+            continue
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = runtime_dir
+        env["WAYLAND_DISPLAY"] = sockets[0]
+        bus_path = f"{runtime_dir}/bus"
+        if os.path.exists(bus_path):
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_path}"
+        return env
+
+    raise RuntimeError("no active Wayland session found under /run/user/*/ - is anyone logged into a graphical session?")
+
+
 def kscreen_outputs() -> list[dict]:
-    result = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, check=True)
+    result = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, check=True, env=find_session_env())
     return json.loads(result.stdout)["outputs"]
 
 
@@ -69,7 +100,7 @@ def best_matching_mode(output: dict, width: int, height: int, refresh: int) -> d
 
 
 def select_mode(connector: str, mode_id: str) -> None:
-    subprocess.run(["kscreen-doctor", f"output.{connector}.mode.{mode_id}"], check=False)
+    subprocess.run(["kscreen-doctor", f"output.{connector}.mode.{mode_id}"], check=False, env=find_session_env())
 
 
 def select_mode_and_verify(connector: str, mode: dict) -> bool:
