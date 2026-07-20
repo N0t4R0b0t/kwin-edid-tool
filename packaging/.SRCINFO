@@ -1,0 +1,19 @@
+pkgbase = sunshine-edid-helper-git
+	pkgdesc = Add custom resolutions to a real display's EDID on Linux/KWin - a workaround for NVIDIA's DRM-KMS driver rejecting runtime-synthesized display modes
+	pkgver = r1.0000000
+	pkgrel = 1
+	url = https://github.com/N0t4R0b0t/sunshine-edid-helper
+	arch = any
+	license = MIT
+	makedepends = git
+	depends = python
+	depends = libkscreen
+	depends = libxcvt
+	optdepends = openbsd-netcat: for the Sunshine connect-hook command
+	optdepends = socat: alternative to openbsd-netcat for the Sunshine connect-hook command
+	provides = sunshine-edid-helper
+	conflicts = sunshine-edid-helper
+	source = sunshine-edid-helper-git::git+https://github.com/N0t4R0b0t/sunshine-edid-helper.git
+	sha256sums = SKIP
+
+pkgname = sunshine-edid-helper-git
