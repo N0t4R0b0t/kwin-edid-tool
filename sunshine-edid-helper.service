@@ -1,0 +1,13 @@
+[Unit]
+Description=Sunshine EDID helper (appends custom resolutions requested by Moonlight clients)
+After=graphical.target
+
+[Service]
+Type=simple
+ExecStart=/opt/sunshine-edid-helper/daemon.py
+Environment=SUNSHINE_EDID_HELPER_CONNECTOR=HDMI-A-1
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
