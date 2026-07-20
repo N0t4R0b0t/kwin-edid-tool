@@ -94,7 +94,7 @@ only ever get added, never removed automatically.
 
 - Linux with debugfs mounted (`CONFIG_DEBUG_FS`)
 - Python 3.10+
-- `cvt` (Arch: `xorg-cvt`)
+- `cvt` (Arch: `libxcvt`)
 - `kscreen-doctor` (KDE Plasma) for the reprobe/mode-select step
 - Root, for both the CLI tool and the daemon - `edid_override` lives under
   `/sys/kernel/debug`, which is `700 root:root` and not reachable via any
