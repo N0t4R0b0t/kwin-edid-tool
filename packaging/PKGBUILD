@@ -1,10 +1,10 @@
 # Maintainer: N0t4R0b0t
-pkgname=sunshine-edid-helper-git
+pkgname=kwin-edid-tool-git
 pkgver=r1.0000000
 pkgrel=1
 pkgdesc="Add custom resolutions to a real display's EDID on Linux/KWin - a workaround for NVIDIA's DRM-KMS driver rejecting runtime-synthesized display modes"
 arch=('any')
-url="https://github.com/N0t4R0b0t/sunshine-edid-helper"
+url="https://github.com/N0t4R0b0t/kwin-edid-tool"
 license=('MIT')
 depends=('python' 'libkscreen' 'libxcvt')
 optdepends=(
@@ -12,9 +12,9 @@ optdepends=(
   'socat: alternative to openbsd-netcat for the Sunshine connect-hook command'
 )
 makedepends=('git')
-provides=('sunshine-edid-helper')
-conflicts=('sunshine-edid-helper')
-source=("$pkgname::git+https://github.com/N0t4R0b0t/sunshine-edid-helper.git")
+provides=('kwin-edid-tool')
+conflicts=('kwin-edid-tool')
+source=("$pkgname::git+https://github.com/N0t4R0b0t/kwin-edid-tool.git")
 sha256sums=('SKIP')
 
 pkgver() {
@@ -25,22 +25,29 @@ pkgver() {
 package() {
   cd "$pkgname"
 
-  # All three Python files live together so `import edid_lib` resolves via
-  # the script's own directory - a wrapper in /usr/bin execs the real file
-  # in place rather than symlinking it there (Python's sys.path[0] handling
-  # for symlinked entry points is inconsistent across versions/platforms).
-  install -Dm755 daemon.py "$pkgdir/usr/lib/sunshine-edid-helper/daemon.py"
-  install -Dm644 edid_lib.py "$pkgdir/usr/lib/sunshine-edid-helper/edid_lib.py"
-  install -Dm755 edid-custom-resolutions.py "$pkgdir/usr/lib/sunshine-edid-helper/edid-custom-resolutions.py"
+  # Core tool.
+  install -Dm644 edid_lib.py "$pkgdir/usr/lib/kwin-edid-tool/edid_lib.py"
+  install -Dm755 edid-custom-resolutions.py "$pkgdir/usr/lib/kwin-edid-tool/edid-custom-resolutions.py"
 
-  install -Dm755 /dev/stdin "$pkgdir/usr/bin/sunshine-edid-custom-resolutions" <<'WRAPPER'
+  # A wrapper execs the real file in place rather than symlinking it into
+  # /usr/bin - Python's sys.path[0] handling for symlinked entry points is
+  # inconsistent across versions/platforms, and this way `import edid_lib`
+  # in the script reliably resolves via its own real directory.
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/kwin-edid-custom-resolutions" <<'WRAPPER'
 #!/bin/sh
-exec /usr/lib/sunshine-edid-helper/edid-custom-resolutions.py "$@"
+exec /usr/lib/kwin-edid-tool/edid-custom-resolutions.py "$@"
 WRAPPER
 
-  sed 's#/opt/sunshine-edid-helper#/usr/lib/sunshine-edid-helper#' sunshine-edid-helper.service > "$srcdir/sunshine-edid-helper.service.patched"
+  # Optional Sunshine connect-hook integration. edid_lib.py is duplicated
+  # alongside daemon.py rather than imported across directories - Python's
+  # automatic same-directory sys.path entry then just finds it.
+  install -Dm755 integrations/sunshine/daemon.py "$pkgdir/usr/lib/kwin-edid-tool/sunshine/daemon.py"
+  install -Dm644 edid_lib.py "$pkgdir/usr/lib/kwin-edid-tool/sunshine/edid_lib.py"
+  sed 's#/opt/sunshine-edid-helper#/usr/lib/kwin-edid-tool/sunshine#' \
+    integrations/sunshine/sunshine-edid-helper.service > "$srcdir/sunshine-edid-helper.service.patched"
   install -Dm644 "$srcdir/sunshine-edid-helper.service.patched" "$pkgdir/usr/lib/systemd/system/sunshine-edid-helper.service"
 
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 integrations/sunshine/README.md "$pkgdir/usr/share/doc/$pkgname/sunshine-integration.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

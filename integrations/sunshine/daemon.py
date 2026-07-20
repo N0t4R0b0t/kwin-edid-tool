@@ -29,6 +29,11 @@ import socketserver
 import subprocess
 import sys
 
+# edid_lib.py must be deployed alongside this file (install.sh and the
+# PKGBUILD both do this) - Python's automatic "script's own directory"
+# sys.path entry then finds it with no extra path handling needed. Not
+# importable directly from a bare git checkout, where it lives two
+# directories up instead; that's not a supported way to run this.
 import edid_lib
 
 SOCKET_PATH = os.environ.get("SUNSHINE_EDID_HELPER_SOCKET", "/run/sunshine-edid-helper.sock")
