@@ -189,8 +189,27 @@ def find_sysfs_edid(connector: str) -> Path:
 
 
 def reprobe(connector: str) -> None:
-    """Force KWin to redetect the connector's modes by disabling then re-enabling
-    just that output - proven safe/reliable in this session's own testing, and
-    scoped to a single output rather than disrupting the whole session."""
-    for state in ("disable", "enable"):
-        subprocess.run(["kscreen-doctor", f"output.{connector}.{state}"], check=False)
+    """Force the kernel to fire a hotplug notification for this connector, so
+    KWin rescans its mode list, without ever asking the compositor to disable
+    the output itself.
+
+    An earlier version of this used `kscreen-doctor output.CONNECTOR.disable`
+    then `.enable` - that hangs indefinitely if the connector happens to be
+    the only currently-enabled output, since KWin won't actually disable your
+    sole active display (confirmed live: the disable request never returns).
+    Writing to the DRM debugfs `force` file instead makes the kernel call
+    drm_kms_helper_hotplug_event() directly, which is a notification to the
+    compositor, not a request - KWin decides what to do with it, and a
+    hotplug notification alone doesn't imply "go disable this output".
+
+    The value written must never represent "disconnected" - "off" would
+    likely trigger the exact same auto-disable behavior we're trying to
+    avoid. Toggling through "on" (always safe - it just means "definitely
+    connected", which is already true) and back to whatever the connector's
+    force value actually was beforehand triggers the notification without
+    leaving any lasting side effect on its auto-detection behavior.
+    """
+    force_path = find_debugfs_connector(connector) / "force"
+    original = force_path.read_text().strip()
+    force_path.write_text("on")
+    force_path.write_text(original)
