@@ -41,8 +41,7 @@ echo "hook has already picked its resolution before the hook runs, so it streams
 echo "Sunshine's own closest-match fallback. A reconnect or later session at the same"
 echo "resolution will then find the exact match."
 echo
-echo "IMPORTANT: the 'newly synthesized custom mode actually gets accepted by the"
-echo "driver once selected' path is NOT yet verified live (needs root, which wasn't"
-echo "available while building this). Test manually first:"
+echo "To sanity-check your own setup, add a resolution manually and confirm it's"
+echo "selectable:"
 echo "  sudo $REPO_ROOT/edid-custom-resolutions.py --connector HDMI-A-1 --add 1024x600@60"
-echo "and check 'kscreen-doctor -o' actually shows it active (marked with *) before relying on the daemon."
+echo "  kscreen-doctor -o   # look for it in the mode list"

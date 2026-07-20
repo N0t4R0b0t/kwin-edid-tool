@@ -35,12 +35,21 @@ resolutions for remote-desktop or game-streaming setups, kiosk displays, etc.
   existing extensions) is left completely untouched, only the extension
   count and base-block checksum are patched
 - Writes the result to `/sys/kernel/debug/dri/*/CONNECTOR/edid_override`
-- Forces a reprobe by disabling and re-enabling just that one output via
-  `kscreen-doctor` (KDE Plasma/KWin only, currently)
+- Forces a reprobe by toggling the connector's DRM debugfs `force` file
+  (through `on`, back to whatever it was) - this makes the kernel fire a
+  hotplug notification directly, without ever asking the compositor to
+  disable the output itself. An earlier version used
+  `kscreen-doctor output.CONNECTOR.disable`/`.enable`, which hangs
+  indefinitely if that connector happens to be your only currently-enabled
+  output - confirmed live, KWin won't actually disable your sole active
+  display.
 
 Every generated EDID is fully spec-valid - verified against
 [`edid-decode`](https://git.linuxtv.org/edid-decode.git) with zero errors or
-warnings during development.
+warnings. The end-to-end mechanism (synthesize a timing, patch the EDID,
+reprobe, select the new mode) has been verified live against real hardware:
+a custom, non-standard resolution was genuinely accepted by the NVIDIA
+driver and rendered.
 
 ## Usage
 
@@ -83,12 +92,15 @@ accepts untrusted network input directly.
 
 ## Known limitations
 
-- Only tested against an NVIDIA + KWin (Plasma 6) setup. The EDID mechanism
-  itself is driver/compositor-agnostic, but the reprobe/mode-selection step
+- Only tested against an NVIDIA + KWin (Plasma 6) setup, where it's
+  confirmed working end-to-end with a real custom resolution. The EDID
+  mechanism itself is driver/compositor-agnostic, but mode-selection
   currently shells out to `kscreen-doctor`, so it's KDE-specific for now.
-- A resolution beyond what your GPU/output can physically drive will fail
-  cleanly rather than actually working - the underlying driver still has the
-  final say on whether it accepts a given timing, EDID or not.
+- A resolution beyond what your GPU/output can physically drive will still
+  fail cleanly rather than actually working - the underlying driver has the
+  final say on whether it accepts a given timing, EDID or not. This is now
+  a real, driver-level rejection rather than the compositor-level one this
+  tool exists to route around.
 - Only whole-number refresh rates are supported (a `cvt -r` requirement).
 - One extension block holds up to 6 custom modes; requesting more than that
   in a single invocation will error out.

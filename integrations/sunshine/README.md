@@ -5,6 +5,12 @@ client connection, checks whether the client's exact requested resolution is
 already available on the target display - if not, adds it to the EDID
 automatically using the core tool at the repo root.
 
+Verified live end-to-end: on a real NVIDIA + KWin session, a client
+connecting at a genuinely custom resolution (not one the display's EDID
+originally advertised) got it added, selected, and confirmed active -
+switching back and forth between it and the display's native resolution
+across multiple reconnects worked reliably.
+
 ## Install
 
 ```bash
@@ -69,6 +75,9 @@ The daemon re-checks `kscreen-doctor`'s reported active mode after selecting
 one, rather than trusting its exit code (which doesn't reflect whether the
 driver actually accepted the modeset). A rejected selection is safe either
 way - the display stays on its previous working mode - but it does mean a
-resolution beyond what your GPU/output can physically drive will fail
-cleanly rather than actually working. Check `journalctl -u
-sunshine-edid-helper` if a resolution isn't showing up.
+resolution beyond what your GPU/output can physically drive will still fail
+cleanly rather than actually working; that's now a genuine driver-level
+limit, not a gap in this tool. Check `journalctl -u sunshine-edid-helper` if
+a resolution isn't showing up - `INFO ... confirmed applied` means it
+worked, anything else means the driver rejected it or something upstream
+(kscreen-doctor, the Wayland session) didn't behave as expected.
