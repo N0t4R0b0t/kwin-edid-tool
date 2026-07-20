@@ -37,6 +37,12 @@ The connector the daemon manages defaults to `HDMI-A-1` - override via the
 `SUNSHINE_EDID_HELPER_CONNECTOR` environment variable (set it in the
 systemd unit, or export it before running `daemon.py` directly).
 
+The daemon runs as root but needs your desktop session's Wayland environment
+to talk to KWin via `kscreen-doctor` - it auto-detects the running session by
+finding a `wayland-*` socket under `/run/user/<uid>/`. On a single-user
+desktop this just works; on a multi-user system where that's ambiguous, set
+`SUNSHINE_EDID_HELPER_UID` explicitly.
+
 ## Important timing note
 
 Sunshine picks the resolution for the *current* connection before this hook
