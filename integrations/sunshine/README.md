@@ -17,21 +17,21 @@ be enabled/started and wired up to Sunshine manually, see below).
 
 ## Configure Sunshine
 
-In Sunshine's **General** settings, set **Do Command (On Client Connect)** to:
+Under Sunshine's **General** tab, find **Command Preparations** and add a new
+entry:
 
-```bash
-sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | socat - UNIX-CONNECT:/run/sunshine-edid-helper.sock || true"
-```
+- **Do**: `sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | socat - UNIX-CONNECT:/run/sunshine-edid-helper.sock || true"`
+- **Undo**: leave blank
 
 (or `nc -U` in place of `socat` if you have `openbsd-netcat` installed instead)
 
 **The trailing `|| true` is required, not optional** - Sunshine aborts the
 entire stream launch if any configured prep command exits non-zero. Without
 it, this daemon being stopped/crashed for any reason would block every
-connection, not just fail to enrich the EDID. This lives under the
-**Advanced** tab as "Command Preparations" (`global_prep_cmd` in Sunshine's
-config), not General - it's a list of Do/Undo command pairs; leave Undo
-blank here.
+connection, not just fail to enrich the EDID.
+
+Command Preparations are read at Sunshine startup, not hot-reloaded - restart
+`sunshine.service` after saving for it to take effect.
 
 The connector the daemon manages defaults to `HDMI-A-1` - override via the
 `SUNSHINE_EDID_HELPER_CONNECTOR` environment variable (set it in the

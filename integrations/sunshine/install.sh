@@ -24,8 +24,8 @@ echo "Installed. Check status with:"
 echo "  systemctl status sunshine-edid-helper"
 echo "  journalctl -u sunshine-edid-helper -f"
 echo
-echo "Now add this under Sunshine's Advanced tab, 'Command Preparations' (Do command,"
-echo "leave Undo blank) - NOT the General tab:"
+echo "Now add this under Sunshine's General tab, 'Command Preparations' (Do command,"
+echo "leave Undo blank):"
 if command -v nc >/dev/null; then
   echo '  sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | nc -U /run/sunshine-edid-helper.sock || true"'
 else
