@@ -20,10 +20,18 @@ be enabled/started and wired up to Sunshine manually, see below).
 In Sunshine's **General** settings, set **Do Command (On Client Connect)** to:
 
 ```bash
-sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | socat - UNIX-CONNECT:/run/sunshine-edid-helper.sock"
+sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | socat - UNIX-CONNECT:/run/sunshine-edid-helper.sock || true"
 ```
 
 (or `nc -U` in place of `socat` if you have `openbsd-netcat` installed instead)
+
+**The trailing `|| true` is required, not optional** - Sunshine aborts the
+entire stream launch if any configured prep command exits non-zero. Without
+it, this daemon being stopped/crashed for any reason would block every
+connection, not just fail to enrich the EDID. This lives under the
+**Advanced** tab as "Command Preparations" (`global_prep_cmd` in Sunshine's
+config), not General - it's a list of Do/Undo command pairs; leave Undo
+blank here.
 
 The connector the daemon manages defaults to `HDMI-A-1` - override via the
 `SUNSHINE_EDID_HELPER_CONNECTOR` environment variable (set it in the

@@ -24,13 +24,17 @@ echo "Installed. Check status with:"
 echo "  systemctl status sunshine-edid-helper"
 echo "  journalctl -u sunshine-edid-helper -f"
 echo
-echo "Now add this to Sunshine's General settings, 'Do Command (On Client Connect)':"
+echo "Now add this under Sunshine's Advanced tab, 'Command Preparations' (Do command,"
+echo "leave Undo blank) - NOT the General tab:"
 if command -v nc >/dev/null; then
-  echo '  sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | nc -U /run/sunshine-edid-helper.sock"'
+  echo '  sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | nc -U /run/sunshine-edid-helper.sock || true"'
 else
-  echo '  sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | socat - UNIX-CONNECT:/run/sunshine-edid-helper.sock"'
+  echo '  sh -c "echo connect,${SUNSHINE_CLIENT_WIDTH},${SUNSHINE_CLIENT_HEIGHT},${SUNSHINE_CLIENT_FPS} | socat - UNIX-CONNECT:/run/sunshine-edid-helper.sock || true"'
   echo "  (nc not found on this system - using socat, which is already installed)"
 fi
+echo "The trailing '|| true' is required - Sunshine aborts the entire stream launch"
+echo "if any prep command exits non-zero, so this must never fail the launch just"
+echo "because the daemon happens to be down."
 echo
 echo "This only enriches the EDID for NEXT time - the connection that triggers this"
 echo "hook has already picked its resolution before the hook runs, so it streams at"
