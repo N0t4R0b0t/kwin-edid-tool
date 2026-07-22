@@ -144,6 +144,25 @@ accepts untrusted network input directly.
   blanking).
 - One extension block holds up to 6 custom modes; requesting more than that
   in a single invocation will error out.
+- **Low target refresh rates can cause visible compositor stutter during
+  animations/effects, even though the mode "works" for static content.**
+  CVT-synthesized timings are always slightly imprecise versus their nominal
+  refresh rate - confirmed via `edid-decode`, a requested 30Hz mode actually
+  measured ~29.66Hz (~1.1% off), while a requested 60Hz mode measured ~59.85Hz
+  (~0.25% off) - proportionally much tighter. A static desktop never exposes
+  this mismatch (nothing changes frame to frame), but compositor animations
+  (window slides, hover previews, notifications) are sensitive to consistent
+  frame timing - a hover-preview effect at a synthesized 30Hz mode was
+  reproducibly laggy while idle, then judders visibly the instant an
+  animation starts, and recovers the instant it ends. Requesting a mode at
+  60Hz (or another exact multiple of 60, where `cvt`'s inherent rounding
+  error stays proportionally small) instead of 30Hz resolved it completely
+  on real hardware. If a client requests a low refresh rate and animations
+  feel laggy, this - not the GPU, not the compositor restart, not the driver
+  - is the first thing to check. (This took a long, misleading debugging
+  session to track down - GPU clock monitoring showed nothing conclusive
+  since it was never a compute-bound issue, and KWin restarts appeared to
+  help inconsistently because they were never the actual variable.)
 
 ## License
 
