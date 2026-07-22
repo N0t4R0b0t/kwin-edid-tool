@@ -14,6 +14,7 @@ optdepends=(
 makedepends=('git')
 provides=('kwin-edid-tool')
 conflicts=('kwin-edid-tool')
+install=kwin-edid-tool-git.install
 source=("$pkgname::git+https://github.com/N0t4R0b0t/kwin-edid-tool.git")
 sha256sums=('SKIP')
 
