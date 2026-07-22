@@ -144,25 +144,31 @@ accepts untrusted network input directly.
   blanking).
 - One extension block holds up to 6 custom modes; requesting more than that
   in a single invocation will error out.
-- **Low target refresh rates can cause visible compositor stutter during
-  animations/effects, even though the mode "works" for static content.**
-  CVT-synthesized timings are always slightly imprecise versus their nominal
-  refresh rate - confirmed via `edid-decode`, a requested 30Hz mode actually
-  measured ~29.66Hz (~1.1% off), while a requested 60Hz mode measured ~59.85Hz
+- **Low target refresh rates used to cause visible compositor stutter during
+  animations/effects, even though the mode "worked" for static content -
+  the Sunshine daemon now avoids this automatically.** CVT-synthesized
+  timings are always slightly imprecise versus their nominal refresh rate -
+  confirmed via `edid-decode`, a requested 30Hz mode actually measured
+  ~29.66Hz (~1.1% off), while a requested 60Hz mode measured ~59.85Hz
   (~0.25% off) - proportionally much tighter. A static desktop never exposes
   this mismatch (nothing changes frame to frame), but compositor animations
   (window slides, hover previews, notifications) are sensitive to consistent
   frame timing - a hover-preview effect at a synthesized 30Hz mode was
-  reproducibly laggy while idle, then judders visibly the instant an
-  animation starts, and recovers the instant it ends. Requesting a mode at
-  60Hz (or another exact multiple of 60, where `cvt`'s inherent rounding
-  error stays proportionally small) instead of 30Hz resolved it completely
-  on real hardware. If a client requests a low refresh rate and animations
-  feel laggy, this - not the GPU, not the compositor restart, not the driver
-  - is the first thing to check. (This took a long, misleading debugging
-  session to track down - GPU clock monitoring showed nothing conclusive
-  since it was never a compute-bound issue, and KWin restarts appeared to
-  help inconsistently because they were never the actual variable.)
+  reproducibly laggy while idle, then juddered visibly the instant an
+  animation started. The [Sunshine daemon](integrations/sunshine/) now
+  always builds new modes at the smallest clean multiple of 60 that's at
+  least the requested refresh (`synthesis_refresh()` in `daemon.py`),
+  regardless of what fps the client actually asked for - safe because
+  Sunshine already encodes/streams at the client's requested fps
+  independent of the display mode's own refresh rate, so a weak client
+  isn't forced to render faster than it can. The standalone CLI tool
+  (`edid-custom-resolutions.py`) still builds exactly what you ask it to,
+  since that's a deliberate, explicit action - if you're adding modes
+  manually, prefer an exact multiple of 60 yourself for the same reason.
+  (This took a long, misleading debugging session to track down - GPU
+  clock monitoring showed nothing conclusive since it was never a
+  compute-bound issue, and KWin restarts appeared to help inconsistently
+  because they were never the actual variable.)
 
 ## License
 
