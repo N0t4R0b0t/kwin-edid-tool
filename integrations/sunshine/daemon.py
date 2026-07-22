@@ -157,7 +157,13 @@ def handle_connect(connector: str, width: int, height: int, refresh: int) -> Non
     output = find_output(outputs, connector)
     new_mode = output and best_matching_mode(output, width, height, refresh)
     if not new_mode:
-        log.error("EDID override applied but %dx%d@%d still not found on %s after reprobe", width, height, refresh, connector)
+        log.warning(
+            "%dx%d@%d added to the EDID but KWin hasn't discovered it yet on %s - this is expected on "
+            "NVIDIA, live reprobing doesn't work here (see README). It'll become selectable after the "
+            "next KWin restart (reboot, Plasma update, or a deliberate `kwin_wayland --replace`), and "
+            "will stay selectable for the rest of that session.",
+            width, height, refresh, connector,
+        )
         return
 
     log.info("added new mode %s (%.2fHz) on %s, selecting it", new_mode["id"], new_mode["refreshRate"], connector)

@@ -38,21 +38,56 @@ resolutions for remote-desktop or game-streaming setups, kiosk displays, etc.
   existing extensions) is left completely untouched, only the extension
   count and base-block checksum are patched
 - Writes the result to `/sys/kernel/debug/dri/*/CONNECTOR/edid_override`
-- Forces a reprobe by toggling the connector's DRM debugfs `force` file
+- Attempts a reprobe by toggling the connector's DRM debugfs `force` file
   (through `on`, back to whatever it was) - this makes the kernel fire a
   hotplug notification directly, without ever asking the compositor to
   disable the output itself. An earlier version used
   `kscreen-doctor output.CONNECTOR.disable`/`.enable`, which hangs
   indefinitely if that connector happens to be your only currently-enabled
   output - confirmed live, KWin won't actually disable your sole active
-  display.
+  display. **On NVIDIA, this reprobe attempt doesn't actually work** - see
+  below.
 
 Every generated EDID is fully spec-valid - verified against
 [`edid-decode`](https://git.linuxtv.org/edid-decode.git) with zero errors or
 warnings. The end-to-end mechanism (synthesize a timing, patch the EDID,
-reprobe, select the new mode) has been verified live against real hardware:
-a custom, non-standard resolution was genuinely accepted by the NVIDIA
-driver and rendered.
+select the new mode) has been verified live against real hardware: a
+custom, non-standard resolution was genuinely accepted by the NVIDIA driver
+and rendered.
+
+## Important: newly-added modes need a KWin restart to become selectable
+
+This was discovered through extensive live debugging and is worth
+understanding clearly rather than re-investigating later as a mystery bug.
+
+**Adding** a resolution to the EDID always works live - the kernel-level
+`edid_override` write succeeds every time, confirmed by the file's growing
+byte count. But **discovering** it - KWin actually re-reading the connector
+and adding it to its own advertised mode list - does not happen live on
+NVIDIA, no matter how it's triggered. Four different mechanisms were tried
+and confirmed ineffective on a real system:
+
+1. The `force` debugfs toggle described above
+2. Toggling a *different*, already-disabled output (hoping for a side effect)
+3. KWin's own `org.kde.KWin.reconfigure()` D-Bus method
+4. A genuine multi-output layout swap (disable/enable as part of a
+   coordinated transition, not a bare single-output disable)
+
+The only thing that worked was fully restarting the compositor
+(`kwin_wayland --replace`) - which forces a real reinitialization of every
+connector, at the cost of restarting your whole graphical session (every
+app, this tool's own live connections, everything). It is not something to
+trigger automatically or often.
+
+**What this means in practice:** the daemon can add a resolution the moment
+a client asks for something new, but it won't be genuinely selectable until
+the next time KWin restarts for any reason - a reboot, a Plasma update, or a
+deliberate `kwin_wayland --replace`. Once a resolution has been discovered
+this way, it stays selectable for the rest of that session/boot, confirmed
+working reliably across many reconnects. This is a real, permanent
+characteristic of this mechanism on NVIDIA, not a bug worth continuing to
+chase - automating a full compositor restart per newly-requested resolution
+would be far more disruptive than the problem it solves.
 
 ## Usage
 
