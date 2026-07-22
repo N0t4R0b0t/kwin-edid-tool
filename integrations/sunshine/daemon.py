@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import socketserver
 import subprocess
@@ -86,17 +87,47 @@ def find_output(outputs: list[dict], connector: str) -> dict | None:
     return next((o for o in outputs if o.get("name") == connector), None)
 
 
+def synthesis_refresh(requested_refresh: int) -> int:
+    """Pick which refresh rate to actually build a new custom mode at.
+
+    CVT-synthesized timings are always slightly imprecise versus their nominal
+    refresh, and that error is proportionally much larger at low refresh rates:
+    confirmed live, a requested 30Hz mode measured ~29.66Hz (~1.1% off) while a
+    60Hz mode measured ~59.85Hz (~0.25% off). A static desktop never exposes
+    that mismatch, but KWin's compositor animations (window slides, hover
+    previews) are sensitive to consistent frame timing - a 30Hz custom mode
+    was reproducibly laggy specifically during those effects, and fixed
+    completely by using 60Hz instead.
+
+    Sunshine encodes/streams at whatever fps the client actually requested,
+    completely independent of the display mode's own refresh rate (confirmed
+    against Sunshine's own capture/encode loop: capture happens at the
+    display's real refresh, encoding paces to the client's requested fps
+    separately) - so building the mode at a clean 60Hz-multiple doesn't force
+    a weak client to render faster than it can. It just gives KWin a
+    proportionally precise timing to pace against, while the client still
+    gets whatever fps it asked for.
+    """
+    return max(60, math.ceil(requested_refresh / 60) * 60)
+
+
 def best_matching_mode(output: dict, width: int, height: int, refresh: int) -> dict | None:
-    """Find the mode on this output closest to the request - exact resolution match
-    required, refresh within tolerance (CVT-RB timings don't land on the nominal
-    refresh exactly, e.g. a 60Hz request commonly decodes to ~59.7Hz)."""
+    """Find the mode on this output closest to the request - exact resolution
+    match required. Refresh only needs to be at least what was requested
+    (within a small undershoot tolerance for CVT's own imprecision, e.g. a
+    60Hz request commonly decodes to ~59.7Hz) - Sunshine encodes at whatever
+    fps the client actually asked for regardless of the mode's own refresh,
+    so a mode built at a higher refresh (see synthesis_refresh()) still
+    satisfies a lower-fps request correctly. Prefers the smallest qualifying
+    refresh, i.e. the closest match from at-or-above the request."""
     candidates = [m for m in output["modes"] if m["size"]["width"] == width and m["size"]["height"] == height]
     if not candidates:
         return None
-    best = min(candidates, key=lambda m: abs(m["refreshRate"] - refresh))
-    if abs(best["refreshRate"] - refresh) > max(REFRESH_TOLERANCE_HZ, refresh * 0.05):
+    tolerance = max(REFRESH_TOLERANCE_HZ, refresh * 0.05)
+    qualifying = [m for m in candidates if m["refreshRate"] >= refresh - tolerance]
+    if not qualifying:
         return None
-    return best
+    return min(qualifying, key=lambda m: m["refreshRate"])
 
 
 def select_mode(connector: str, mode_id: str) -> None:
@@ -136,19 +167,25 @@ def handle_connect(connector: str, width: int, height: int, refresh: int) -> Non
             log.info("confirmed applied")
         return
 
-    log.info("%dx%d@%d not available on %s, extending EDID", width, height, refresh, connector)
+    build_refresh = synthesis_refresh(refresh)
+    log.info(
+        "%dx%d@%d not available on %s, extending EDID (building the mode at %dHz rather than the "
+        "requested %dHz for proportionally precise CVT timing - Sunshine will still encode/stream "
+        "at the client's actual requested fps regardless of the mode's own refresh)",
+        width, height, refresh, connector, build_refresh, refresh,
+    )
     try:
         sysfs_edid_path = edid_lib.find_sysfs_edid(connector)
         original = sysfs_edid_path.read_bytes()
-        patched = edid_lib.append_modes_to_edid(original, [(width, height, refresh)])
+        patched = edid_lib.append_modes_to_edid(original, [(width, height, build_refresh)])
 
         debugfs_path = edid_lib.find_debugfs_connector(connector) / "edid_override"
         debugfs_path.write_bytes(patched)
     except edid_lib.ImpossibleTimingError as e:
-        log.error("can't encode %dx%d@%d in an EDID DTD: %s", width, height, refresh, e)
+        log.error("can't encode %dx%d@%d in an EDID DTD: %s", width, height, build_refresh, e)
         return
     except Exception:
-        log.exception("failed to build/apply EDID extension for %dx%d@%d on %s", width, height, refresh, connector)
+        log.exception("failed to build/apply EDID extension for %dx%d@%d on %s", width, height, build_refresh, connector)
         return
 
     edid_lib.reprobe(connector)
