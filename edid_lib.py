@@ -34,15 +34,23 @@ def parse_resolution(spec: str) -> tuple[int, int, int]:
     if not m:
         raise ValueError(f"expected WIDTHxHEIGHT@REFRESH (e.g. 1024x600@60), got {spec!r}")
     width, height, refresh = (int(g) for g in m.groups())
-    if refresh % 60 != 0:
-        raise ValueError(f"{spec}: only multiples of 60Hz are supported (cvt -r requires it)")
     return width, height, refresh
 
 
-def cvt_reduced_blanking(width: int, height: int, refresh: int) -> dict:
-    """Shell out to the system `cvt` utility for VESA CVT-RB timing math instead of
-    reimplementing it - avoids an entire class of off-by-one/rounding bugs."""
-    result = subprocess.run(["cvt", "-r", str(width), str(height), str(refresh)], capture_output=True, text=True, check=True)
+def cvt_timing(width: int, height: int, refresh: int) -> dict:
+    """Shell out to the system `cvt` utility for VESA CVT timing math instead of
+    reimplementing it - avoids an entire class of off-by-one/rounding bugs.
+
+    Deliberately standard blanking, not reduced (`cvt -r`): reduced blanking
+    only accepts refresh rates that are exact multiples of 60Hz ("ERROR:
+    Multiple of 60Hz refresh rate required for reduced blanking") - confirmed
+    live, a client requesting 1024x600@30 crashed the daemon since 30 isn't a
+    multiple of 60. Standard blanking has no such restriction and supports
+    any requested refresh rate, at the cost of a slightly larger pixel clock
+    than reduced blanking would use for the same resolution - irrelevant here
+    since these are synthesized modes with no bandwidth budget to protect.
+    """
+    result = subprocess.run(["cvt", str(width), str(height), str(refresh)], capture_output=True, text=True, check=True)
     modeline = next((line for line in result.stdout.splitlines() if line.startswith("Modeline")), None)
     if not modeline:
         raise RuntimeError(f"cvt produced no Modeline for {width}x{height}@{refresh}:\n{result.stdout}")
@@ -76,7 +84,7 @@ def _check_field(name: str, value: int, max_value: int) -> None:
 
 
 def pack_detailed_timing(t: dict) -> bytes:
-    """Pack a VESA EDID 18-byte Detailed Timing Descriptor from cvt_reduced_blanking()'s output.
+    """Pack a VESA EDID 18-byte Detailed Timing Descriptor from cvt_timing()'s output.
     Raises ImpossibleTimingError instead of silently truncating if any field overflows."""
     pclk_10khz = t["pixel_clock_khz"] // 10
     h_active, h_blank = t["h_active"], t["h_blank"]
@@ -137,7 +145,7 @@ def build_extension_block(modes: list[tuple[int, int, int]]) -> bytes:
 
     offset = 4
     for width, height, refresh in modes:
-        timing = cvt_reduced_blanking(width, height, refresh)
+        timing = cvt_timing(width, height, refresh)
         descriptor = pack_detailed_timing(timing)
         block[offset : offset + 18] = descriptor
         offset += 18

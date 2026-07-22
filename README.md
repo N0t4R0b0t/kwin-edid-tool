@@ -28,8 +28,11 @@ resolutions for remote-desktop or game-streaming setups, kiosk displays, etc.
 ## How it works
 
 - Reads the display's current EDID (`/sys/class/drm/cardN-CONNECTOR/edid`)
-- Computes VESA CVT reduced-blanking timings for the requested resolution
-  (via the system `cvt` utility - no timing math reimplemented here)
+- Computes VESA CVT (standard blanking, not reduced) timings for the
+  requested resolution via the system `cvt` utility - no timing math
+  reimplemented here. Standard blanking specifically because reduced
+  blanking (`cvt -r`) only accepts refresh rates that are exact multiples of
+  60Hz - confirmed live, a 30Hz request crashed the timing generation
 - Appends a new CTA-861 extension block containing just the new mode(s) as
   Detailed Timing Descriptors - the original EDID (base block and any
   existing extensions) is left completely untouched, only the extension
@@ -101,7 +104,9 @@ accepts untrusted network input directly.
   final say on whether it accepts a given timing, EDID or not. This is now
   a real, driver-level rejection rather than the compositor-level one this
   tool exists to route around.
-- Only whole-number refresh rates are supported (a `cvt -r` requirement).
+- Only whole-number refresh rates are supported (a parsing choice, not a
+  `cvt` limitation - arbitrary refresh rates work fine with standard
+  blanking).
 - One extension block holds up to 6 custom modes; requesting more than that
   in a single invocation will error out.
 
