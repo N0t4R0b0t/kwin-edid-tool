@@ -1,9 +1,9 @@
 post_install() {
-	systemctl enable sunshine-edid-helper.service > /dev/null 2>&1 || true
-	echo "==> sunshine-edid-helper.service enabled for next boot."
-	echo "==> Start it now with: sudo systemctl start sunshine-edid-helper"
-	echo "==> EDID overrides don't survive a reboot (kernel debugfs, not persisted) -"
-	echo "    the daemon re-adds a resolution the first time a client asks for it again."
+	systemctl enable sunshine-edid-helper.service sunshine-edid-seed.service > /dev/null 2>&1 || true
+	echo "==> sunshine-edid-helper.service and sunshine-edid-seed.service enabled for next boot."
+	echo "==> Start the helper now with: sudo systemctl start sunshine-edid-helper"
+	echo "==> Every requested resolution is saved under /var/lib/sunshine-edid-helper and re-applied"
+	echo "    at boot, before the display manager starts, so it is available from the first connection."
 }
 
 post_upgrade() {

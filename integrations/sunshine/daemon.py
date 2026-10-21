@@ -17,18 +17,29 @@ No disconnect handling and no per-session teardown - modes only ever get
 added, never removed automatically. Run edid-custom-resolutions.py --reset
 manually if you want to wipe the accumulated custom modes and start over.
 
+Persistence: every mode this daemon is asked for is recorded under STATE_DIR
+and re-applied at boot by `--seed` (see sunshine-edid-seed.service), which
+runs before the display manager so KWin starts up already knowing about them.
+This is what makes a resolution survive a reboot - the debugfs override itself
+is volatile, and the daemon only ever writes it in response to a connection,
+which is far too late for an already-running compositor.
+
 Install: see install.sh in this directory.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
 import os
+import pwd
 import socketserver
 import subprocess
 import sys
+import time
+from pathlib import Path
 
 # edid_lib.py must be deployed alongside this file (install.sh and the
 # PKGBUILD both do this) - Python's automatic "script's own directory"
@@ -39,15 +50,26 @@ import edid_lib
 
 SOCKET_PATH = os.environ.get("SUNSHINE_EDID_HELPER_SOCKET", "/run/sunshine-edid-helper.sock")
 CONNECTOR = os.environ.get("SUNSHINE_EDID_HELPER_CONNECTOR", "HDMI-A-1")
+STATE_DIR = Path(os.environ.get("SUNSHINE_EDID_HELPER_STATE_DIR", "/var/lib/sunshine-edid-helper"))
+
+# Restarting KWin is the only way to get a newly-added mode discovered on drivers
+# where live reprobing doesn't work (NVIDIA). Set to 0 to just persist the mode
+# and wait for the next boot to pick it up instead.
+RESTART_KWIN = os.environ.get("SUNSHINE_EDID_HELPER_RESTART_KWIN", "1").lower() not in ("0", "false", "no")
+KWIN_UNIT = "plasma-kwin_wayland.service"
 
 # How close an existing mode's resolution/refresh needs to be to count as "already there".
 REFRESH_TOLERANCE_HZ = 2.0
+
+# A CTA-861 extension block fits 6 DTDs and we only ever append one block, so
+# the accumulated set is capped - oldest-requested modes get evicted first.
+MAX_PERSISTED_MODES = 6
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("sunshine-edid-helper")
 
 
-def find_session_env() -> dict:
+def find_session() -> tuple[str, dict]:
     """kscreen-doctor needs the desktop user's Wayland session to connect to KWin
     at all - this daemon runs as root via a system-level systemd unit, which has
     none of that, so every kscreen-doctor call would otherwise crash outright
@@ -73,9 +95,13 @@ def find_session_env() -> dict:
         bus_path = f"{runtime_dir}/bus"
         if os.path.exists(bus_path):
             env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_path}"
-        return env
+        return str(uid), env
 
     raise RuntimeError("no active Wayland session found under /run/user/*/ - is anyone logged into a graphical session?")
+
+
+def find_session_env() -> dict:
+    return find_session()[1]
 
 
 def kscreen_outputs() -> list[dict]:
@@ -85,6 +111,126 @@ def kscreen_outputs() -> list[dict]:
 
 def find_output(outputs: list[dict], connector: str) -> dict | None:
     return next((o for o in outputs if o.get("name") == connector), None)
+
+
+def _state_file(connector: str) -> Path:
+    return STATE_DIR / f"{connector}.json"
+
+
+def _baseline_file(connector: str) -> Path:
+    return STATE_DIR / f"{connector}.edid"
+
+
+def load_modes(connector: str) -> list[tuple[int, int, int]]:
+    """Every mode we've ever synthesized for this connector, oldest first."""
+    try:
+        raw = json.loads(_state_file(connector).read_text())
+    except FileNotFoundError:
+        return []
+    except (ValueError, OSError):
+        log.exception("state file for %s is unreadable, starting over", connector)
+        return []
+    return [tuple(m) for m in raw.get("modes", [])]
+
+
+def remember_mode(connector: str, mode: tuple[int, int, int]) -> list[tuple[int, int, int]]:
+    """Append a mode to the persisted set (moving it to the front of the eviction
+    queue if already known) and return the full set to apply."""
+    modes = [m for m in load_modes(connector) if m != mode]
+    modes.append(mode)
+    modes = modes[-MAX_PERSISTED_MODES:]
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _state_file(connector).with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"modes": [list(m) for m in modes]}, indent=2))
+    tmp.replace(_state_file(connector))  # atomic - a torn state file on a crash would strand every saved mode
+    return modes
+
+
+def is_valid_edid(data: bytes) -> bool:
+    """Whole 128-byte blocks, with a base block whose checksum validates."""
+    return len(data) >= 128 and len(data) % 128 == 0 and sum(data[0:128]) % 256 == 0
+
+
+def baseline_edid(connector: str) -> bytes:
+    """The connector's real, un-overridden EDID.
+
+    Cached on disk the first time we see it, and never re-read from sysfs
+    afterwards. Two reasons: on drivers where reprobing DOES work, sysfs starts
+    reflecting our own override, so rebuilding from it would append a second
+    extension block on top of the first and keep growing. And on drivers where
+    it doesn't (NVIDIA), sysfs stays pristine but we'd silently rebuild from
+    scratch each time - which is exactly the bug that made every previously
+    added mode vanish as soon as a different resolution was requested.
+
+    The cache is captured by `--seed` at boot, before any override can exist.
+    """
+    cached = _baseline_file(connector)
+    if cached.exists():
+        data = cached.read_bytes()
+        if is_valid_edid(data):
+            return data
+        log.warning("cached baseline EDID for %s is not a valid EDID, capturing it again", connector)
+
+    original = edid_lib.find_sysfs_edid(connector).read_bytes()
+    if not is_valid_edid(original):
+        # An empty or garbled read (display off, connector not probed yet) must never be
+        # cached: every later mode would fail against it until someone deleted the file.
+        raise RuntimeError(f"sysfs EDID for {connector} is not a valid EDID ({len(original)} bytes) - is the display on?")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(original)
+    log.info("cached baseline EDID for %s (%d bytes) at %s", connector, len(original), cached)
+    return original
+
+
+def apply_modes(connector: str, modes: list[tuple[int, int, int]]) -> None:
+    """Rebuild the override from the baseline EDID plus the full accumulated set."""
+    patched = edid_lib.append_modes_to_edid(baseline_edid(connector), modes)
+    (edid_lib.find_debugfs_connector(connector) / "edid_override").write_bytes(patched)
+
+
+def restart_kwin() -> bool:
+    """Restart the compositor so it re-reads the connector's EDID.
+
+    KWin only ever scans a connector's mode list at startup, so on a driver
+    that won't reprobe live this is the only way to make a freshly added mode
+    selectable within the current session. Goes through KWin's systemd user
+    unit rather than `kwin_wayland --replace`: the unit is what actually owns
+    the process under a Plasma 6 systemd-managed session, so letting systemd
+    do the handover keeps the rest of graphical-session.target intact.
+    """
+    try:
+        uid, env = find_session()
+        user = pwd.getpwuid(int(uid)).pw_name
+    except (RuntimeError, KeyError, ValueError):
+        log.exception("can't identify the desktop session, not restarting KWin")
+        return False
+
+    log.warning("restarting %s as %s - the current stream will drop, reconnect to pick up the new mode", KWIN_UNIT, user)
+    result = subprocess.run(
+        ["runuser", "-u", user, "--", "systemctl", "--user", "restart", KWIN_UNIT],
+        capture_output=True, text=True, env=env,
+    )
+    if result.returncode != 0:
+        log.error("failed to restart %s: %s", KWIN_UNIT, result.stderr.strip())
+        return False
+    return True
+
+
+def wait_for_mode(connector: str, width: int, height: int, refresh: int, timeout: float = 30.0) -> dict | None:
+    """Poll until the compositor is back up and advertising the mode. Called
+    after a KWin restart, so early failures are just 'not up yet', not errors."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(1.0)
+        try:
+            output = find_output(kscreen_outputs(), connector)
+        except Exception:
+            continue
+        mode = output and best_matching_mode(output, width, height, refresh)
+        if mode:
+            return mode
+    return None
 
 
 def synthesis_refresh(requested_refresh: int) -> int:
@@ -175,12 +321,10 @@ def handle_connect(connector: str, width: int, height: int, refresh: int) -> Non
         width, height, refresh, connector, build_refresh, refresh,
     )
     try:
-        sysfs_edid_path = edid_lib.find_sysfs_edid(connector)
-        original = sysfs_edid_path.read_bytes()
-        patched = edid_lib.append_modes_to_edid(original, [(width, height, build_refresh)])
-
-        debugfs_path = edid_lib.find_debugfs_connector(connector) / "edid_override"
-        debugfs_path.write_bytes(patched)
+        # Persist BEFORE applying: if anything below fails or the machine dies
+        # mid-way, the mode is still recorded and the next --seed will apply it.
+        modes = remember_mode(connector, (width, height, build_refresh))
+        apply_modes(connector, modes)
     except edid_lib.ImpossibleTimingError as e:
         log.error("can't encode %dx%d@%d in an EDID DTD: %s", width, height, build_refresh, e)
         return
@@ -193,15 +337,27 @@ def handle_connect(connector: str, width: int, height: int, refresh: int) -> Non
     outputs = kscreen_outputs()
     output = find_output(outputs, connector)
     new_mode = output and best_matching_mode(output, width, height, refresh)
+
     if not new_mode:
-        log.warning(
-            "%dx%d@%d added to the EDID but KWin hasn't discovered it yet on %s - this is expected on "
-            "NVIDIA, live reprobing doesn't work here (see README). It'll become selectable after the "
-            "next KWin restart (reboot, Plasma update, or a deliberate `kwin_wayland --replace`), and "
-            "will stay selectable for the rest of that session.",
-            width, height, refresh, connector,
+        log.info(
+            "%dx%d@%d added to the EDID but KWin hasn't discovered it live on %s - expected on NVIDIA, "
+            "which doesn't support live reprobing. It's persisted now (%d mode(s) saved), so it will be "
+            "seeded before KWin starts on every subsequent boot.",
+            width, height, refresh, connector, len(modes),
         )
-        return
+        if not RESTART_KWIN:
+            log.warning("auto-restart disabled - %dx%d@%d becomes selectable after the next reboot", width, height, refresh)
+            return
+        if not restart_kwin():
+            return
+        new_mode = wait_for_mode(connector, width, height, refresh)
+        if not new_mode:
+            log.error(
+                "KWin restarted but %dx%d@%d still isn't advertised on %s - the mode stays persisted, "
+                "check `kscreen-doctor -o` and the seeding unit",
+                width, height, refresh, connector,
+            )
+            return
 
     log.info("added new mode %s (%.2fHz) on %s, selecting it", new_mode["id"], new_mode["refreshRate"], connector)
     if select_mode_and_verify(connector, new_mode):
@@ -223,9 +379,58 @@ class Handler(socketserver.StreamRequestHandler):
             log.exception("error handling request")
 
 
+def wait_for_connector(connector: str, timeout: float = 30.0) -> None:
+    """Block until the connector's debugfs entry exists. At boot we deliberately
+    run before the display manager, which can be earlier than the GPU driver
+    finishing its own setup - so the connector may not be there on first look."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            edid_lib.find_debugfs_connector(connector)
+            return
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
+def seed() -> None:
+    """Re-apply every persisted mode, before KWin starts.
+
+    This is the half that makes custom resolutions survive a reboot. The
+    debugfs override is volatile, and the socket handler only writes it in
+    response to a client connecting - which always happens after the
+    compositor has already scanned the connector, and is therefore always too
+    late. Applying the saved set here instead means KWin comes up with the
+    modes already present and no restart is needed at all.
+    """
+    wait_for_connector(CONNECTOR)
+
+    # Captures the pristine EDID on first boot after install, while we can still
+    # be certain no override is in place.
+    baseline_edid(CONNECTOR)
+
+    modes = load_modes(CONNECTOR)
+    if not modes:
+        log.info("no persisted modes for %s yet, nothing to seed", CONNECTOR)
+        return
+
+    apply_modes(CONNECTOR, modes)
+    edid_lib.reprobe(CONNECTOR)
+    log.info("seeded %d persisted mode(s) onto %s: %s", len(modes), CONNECTOR, ", ".join(f"{w}x{h}@{r}" for w, h, r in modes))
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Sunshine EDID helper daemon")
+    parser.add_argument("--seed", action="store_true", help="Apply persisted modes and exit (run at boot, before the display manager)")
+    args = parser.parse_args()
+
     if os.geteuid() != 0:
         raise SystemExit("must run as root (writes to debugfs)")
+
+    if args.seed:
+        seed()
+        return
 
     if os.path.exists(SOCKET_PATH):
         os.remove(SOCKET_PATH)

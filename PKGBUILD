@@ -44,9 +44,14 @@ WRAPPER
   # automatic same-directory sys.path entry then just finds it.
   install -Dm755 integrations/sunshine/daemon.py "$pkgdir/usr/lib/kwin-edid-tool/sunshine/daemon.py"
   install -Dm644 edid_lib.py "$pkgdir/usr/lib/kwin-edid-tool/sunshine/edid_lib.py"
-  sed 's#/opt/sunshine-edid-helper#/usr/lib/kwin-edid-tool/sunshine#' \
-    integrations/sunshine/sunshine-edid-helper.service > "$srcdir/sunshine-edid-helper.service.patched"
-  install -Dm644 "$srcdir/sunshine-edid-helper.service.patched" "$pkgdir/usr/lib/systemd/system/sunshine-edid-helper.service"
+  for unit in sunshine-edid-helper sunshine-edid-seed; do
+    sed 's#/opt/sunshine-edid-helper#/usr/lib/kwin-edid-tool/sunshine#' \
+      "integrations/sunshine/$unit.service" > "$srcdir/$unit.service.patched"
+    install -Dm644 "$srcdir/$unit.service.patched" "$pkgdir/usr/lib/systemd/system/$unit.service"
+  done
+
+  # State dir for persisted custom modes, so seeding works from the first boot.
+  install -dm755 "$pkgdir/var/lib/sunshine-edid-helper"
 
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 integrations/sunshine/README.md "$pkgdir/usr/share/doc/$pkgname/sunshine-integration.md"

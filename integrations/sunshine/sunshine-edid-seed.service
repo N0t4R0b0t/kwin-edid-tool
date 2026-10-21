@@ -1,0 +1,23 @@
+[Unit]
+Description=Seed persisted Sunshine custom resolutions into the connector EDID
+Documentation=https://github.com/N0t4R0b0t/sunshine-edid-helper
+# The whole point of this unit is to run BEFORE the compositor exists. KWin only
+# scans a connector's mode list at startup, and the debugfs override we write is
+# volatile, so unless the modes are back in place before the display manager
+# starts, nothing added in a previous session survives the reboot.
+Before=display-manager.service
+RequiresMountsFor=/sys/kernel/debug /var/lib
+After=sys-kernel-debug.mount local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/sunshine-edid-helper/daemon.py --seed
+Environment=SUNSHINE_EDID_HELPER_CONNECTOR=HDMI-A-1
+# Seeding is best-effort: a GPU that came up without the connector, or a
+# corrupted state file, must never be allowed to block the graphical session.
+SuccessExitStatus=0 1
+TimeoutStartSec=45
+
+[Install]
+WantedBy=graphical.target

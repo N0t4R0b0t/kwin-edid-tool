@@ -11,13 +11,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INSTALL_DIR=/opt/sunshine-edid-helper
 
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" /var/lib/sunshine-edid-helper
 cp "$SCRIPT_DIR/daemon.py" "$REPO_ROOT/edid_lib.py" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/daemon.py"
 
-cp "$SCRIPT_DIR/sunshine-edid-helper.service" /etc/systemd/system/
+cp "$SCRIPT_DIR/sunshine-edid-helper.service" "$SCRIPT_DIR/sunshine-edid-seed.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now sunshine-edid-helper.service
+# Seeding only ever does anything at boot (it must run before the display
+# manager), so enable it without --now.
+systemctl enable sunshine-edid-seed.service
 
 echo
 echo "Installed. Check status with:"
@@ -40,6 +43,13 @@ echo "This only enriches the EDID for NEXT time - the connection that triggers t
 echo "hook has already picked its resolution before the hook runs, so it streams at"
 echo "Sunshine's own closest-match fallback. A reconnect or later session at the same"
 echo "resolution will then find the exact match."
+echo
+echo "Every requested mode is persisted under /var/lib/sunshine-edid-helper and"
+echo "re-applied at boot by sunshine-edid-seed.service, which runs before the display"
+echo "manager so KWin starts up already knowing about them. On drivers that can't"
+echo "reprobe live (NVIDIA), a brand-new resolution additionally restarts KWin once so"
+echo "it becomes usable without waiting for a reboot; set"
+echo "SUNSHINE_EDID_HELPER_RESTART_KWIN=0 in the unit to disable that."
 echo
 echo "To sanity-check your own setup, add a resolution manually and confirm it's"
 echo "selectable:"

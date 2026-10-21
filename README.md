@@ -81,13 +81,47 @@ trigger automatically or often.
 
 **What this means in practice:** the daemon can add a resolution the moment
 a client asks for something new, but it won't be genuinely selectable until
-the next time KWin restarts for any reason - a reboot, a Plasma update, or a
-deliberate `kwin_wayland --replace`. Once a resolution has been discovered
-this way, it stays selectable for the rest of that session/boot, confirmed
-working reliably across many reconnects. This is a real, permanent
-characteristic of this mechanism on NVIDIA, not a bug worth continuing to
-chase - automating a full compositor restart per newly-requested resolution
-would be far more disruptive than the problem it solves.
+the next time KWin restarts. Once a resolution has been discovered this way,
+it stays selectable for the rest of that session/boot, confirmed working
+reliably across many reconnects.
+
+### How the daemon works around it
+
+An earlier version of this document told you to wait for "a reboot, a Plasma
+update, or a deliberate `kwin_wayland --replace`". The reboot half of that
+was wrong, and worth spelling out because it looks plausible: `edid_override`
+lives in **debugfs**, so it does not survive a reboot at all, and the daemon
+only ever wrote it in response to a client connecting - which is always
+*after* the freshly-booted KWin has already scanned the connector. Every
+reboot therefore threw the mode away and re-entered the same losing race.
+
+The daemon now closes that loop with two pieces:
+
+1. **Persistence.** Every synthesized mode is recorded in
+   `/var/lib/sunshine-edid-helper/<connector>.json`, along with a cached copy
+   of the connector's pristine EDID. The override is always rebuilt from that
+   baseline plus the *full* accumulated set, which also fixes a subtler bug:
+   rebuilding from live sysfs meant each new resolution silently discarded
+   the previously added one on NVIDIA (where sysfs never reflects the
+   override), while on drivers that do reprobe it would have stacked a new
+   extension block on every request.
+2. **Boot seeding.** `sunshine-edid-seed.service` runs `daemon.py --seed`
+   ordered `Before=display-manager.service`, re-applying the saved set while
+   there is no compositor yet. KWin then starts up already advertising those
+   modes, so no restart is involved and a reconnect gets the exact resolution
+   immediately.
+
+A genuinely new resolution - one never requested before on this machine -
+still can't be discovered live, so the daemon restarts KWin once (via its
+`plasma-kwin_wayland.service` user unit, letting systemd handle the handover
+rather than racing `--replace` against the session). That costs the current
+stream, happens at most once per resolution ever, and every subsequent boot
+is handled by seeding instead. Set
+`SUNSHINE_EDID_HELPER_RESTART_KWIN=0` in the unit to persist only and wait
+for the next boot.
+
+Note the cap: one CTA-861 extension block holds six detailed timings, so at
+most six custom modes are kept, evicting least-recently-requested first.
 
 ## Usage
 
