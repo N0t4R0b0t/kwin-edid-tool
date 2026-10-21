@@ -8,6 +8,11 @@ Documentation=https://github.com/N0t4R0b0t/sunshine-edid-helper
 Before=display-manager.service
 RequiresMountsFor=/sys/kernel/debug /var/lib
 After=sys-kernel-debug.mount local-fs.target
+# Wait for plymouth to leave the display before rewriting the EDID. On boots where this
+# unit ran first, plymouth-quit timed out (20s) and graphical.target never completed.
+# plymouth-quit.service is itself ordered Before the display manager, so this still lands
+# well ahead of KWin, which only starts after a user logs in.
+After=plymouth-quit.service
 
 [Service]
 Type=oneshot

@@ -220,9 +220,14 @@ was too strong. It does after a detect.
   is why the helper must not be ordered after it. Everything else works,
   including the mode itself. The cause is not established. The suspect is the
   seed rewriting the connector's EDID while plymouth is still driving the
-  display. An untested mitigation is to order the seed
-  `After=plymouth-quit.service`, still `Before=display-manager.service`, so the
-  override is written once plymouth has gone and still well before KWin starts.
+  display. Mitigation applied, **not yet confirmed on a boot**: the seed is now
+  ordered `After=plymouth-quit.service`, still `Before=display-manager.service`,
+  so the override is written once plymouth has gone and still well before KWin
+  starts (it only starts after login). To confirm, check
+  `systemctl status plymouth-quit` after a boot: it should show `Finished`
+  within a few seconds, not `Result: timeout`, and
+  `systemctl is-active graphical.target` should say `active`. If it still times
+  out, the seed is not the cause and this note should be revisited.
   The seed also no longer toggles `force`: there is no compositor to notify at
   that point, so it was never needed.
 - **Do not restart `plasma-kwin_wayland.service` to apply a mode.** It also
