@@ -36,20 +36,15 @@ def parse_resolution(spec: str) -> tuple[int, int, int]:
     return width, height, refresh
 
 
-def cvt_timing(width: int, height: int, refresh: int) -> dict:
-    """Shell out to the system `cvt` utility for VESA CVT timing math instead of
-    reimplementing it - avoids an entire class of off-by-one/rounding bugs.
+# HDMI 2.0's maximum TMDS character rate. A mode needing more than this is dropped by the
+# driver (confirmed live: a 642 MHz 3456x2160@60 mode never reached KWin's mode list on an
+# HDMI port whose HDMI Forum block advertised 600 MHz).
+MAX_TMDS_CLOCK_MHZ = 600.0
 
-    Deliberately standard blanking, not reduced (`cvt -r`): reduced blanking
-    only accepts refresh rates that are exact multiples of 60Hz ("ERROR:
-    Multiple of 60Hz refresh rate required for reduced blanking") - confirmed
-    live, a client requesting 1024x600@30 crashed the daemon since 30 isn't a
-    multiple of 60. Standard blanking has no such restriction and supports
-    any requested refresh rate, at the cost of a slightly larger pixel clock
-    than reduced blanking would use for the same resolution - irrelevant here
-    since these are synthesized modes with no bandwidth budget to protect.
-    """
-    result = subprocess.run(["cvt", str(width), str(height), str(refresh)], capture_output=True, text=True, check=True)
+
+def _run_cvt(width: int, height: int, refresh: int, reduced: bool) -> dict:
+    command = ["cvt", *(["-r"] if reduced else []), str(width), str(height), str(refresh)]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
     modeline = next((line for line in result.stdout.splitlines() if line.startswith("Modeline")), None)
     if not modeline:
         raise RuntimeError(f"cvt produced no Modeline for {width}x{height}@{refresh}:\n{result.stdout}")
@@ -75,6 +70,26 @@ def cvt_timing(width: int, height: int, refresh: int) -> dict:
         "h_sync_positive": h_sync_positive,
         "v_sync_positive": v_sync_positive,
     }
+
+
+def cvt_timing(width: int, height: int, refresh: int) -> dict:
+    """Shell out to the system `cvt` utility for VESA CVT timing math instead of
+    reimplementing it - avoids an entire class of off-by-one/rounding bugs.
+
+    Standard blanking is the default: reduced blanking (`cvt -r`) only accepts
+    refresh rates that are exact multiples of 60Hz ("ERROR: Multiple of 60Hz
+    refresh rate required for reduced blanking") - confirmed live, a client
+    requesting 1024x600@30 crashed the daemon since 30 isn't a multiple of 60.
+
+    The exception is a mode whose standard-blanking pixel clock exceeds
+    MAX_TMDS_CLOCK_MHZ, which the driver silently discards (3456x2160@60 needs
+    642 MHz with standard blanking but 482 MHz reduced). Where the refresh rate
+    allows it, such a mode is rebuilt with reduced blanking instead.
+    """
+    timing = _run_cvt(width, height, refresh, reduced=False)
+    if timing["pixel_clock_khz"] > MAX_TMDS_CLOCK_MHZ * 1000 and refresh % 60 == 0:
+        timing = _run_cvt(width, height, refresh, reduced=True)
+    return timing
 
 
 def _check_field(name: str, value: int, max_value: int) -> None:

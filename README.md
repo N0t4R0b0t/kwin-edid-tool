@@ -32,7 +32,12 @@ resolutions for remote-desktop or game-streaming setups, kiosk displays, etc.
   requested resolution via the system `cvt` utility - no timing math
   reimplemented here. Standard blanking specifically because reduced
   blanking (`cvt -r`) only accepts refresh rates that are exact multiples of
-  60Hz - confirmed live, a 30Hz request crashed the timing generation
+  60Hz - confirmed live, a 30Hz request crashed the timing generation.
+  The one exception: when standard blanking needs more than 600 MHz (the
+  HDMI 2.0 limit) and the refresh is a multiple of 60Hz, reduced blanking is
+  used instead. Confirmed live that the driver silently drops a 642 MHz
+  3456x2160@60 mode, so it never reaches KWin; reduced blanking makes it
+  482 MHz
 - Appends a new CTA-861 extension block containing just the new mode(s) as
   Detailed Timing Descriptors - the original EDID (base block and any
   existing extensions) is left completely untouched, only the extension
