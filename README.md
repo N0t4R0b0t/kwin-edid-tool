@@ -106,10 +106,11 @@ The daemon now closes that loop with two pieces:
    `/var/lib/sunshine-edid-helper/<connector>.json`, along with a cached copy
    of the connector's pristine EDID. The override is always rebuilt from that
    baseline plus the *full* accumulated set, which also fixes a subtler bug:
-   rebuilding from live sysfs meant each new resolution silently discarded
-   the previously added one on NVIDIA (where sysfs never reflects the
-   override), while on drivers that do reprobe it would have stacked a new
-   extension block on every request.
+   rebuilding from live sysfs would either discard the previously added mode
+   (when sysfs still shows the pristine EDID) or stack a new extension block
+   on every request (once a connector detect has made sysfs reflect the
+   override - see "The driver only re-reads the override at a connector
+   detect" below).
 2. **Boot seeding.** `sunshine-edid-seed.service` runs `daemon.py --seed`
    ordered `Before=display-manager.service`, re-applying the saved set while
    there is no compositor yet. KWin then starts up already advertising those
@@ -130,6 +131,112 @@ screen. Only enable it if you accept that, once per new resolution.
 
 Note the cap: one CTA-861 extension block holds six detailed timings, so at
 most six custom modes are kept, evicting least-recently-requested first.
+
+## Troubleshooting a mode that does not show up
+
+Hard-won notes from getting a `3456x2160@60` mode through on an NVIDIA HDMI
+port. Every check below works without root unless marked.
+
+### Check, in this order
+
+1. **Is the override in the kernel?** (root) The size of
+   `/sys/kernel/debug/dri/N/CONNECTOR/edid_override` is the connector's own
+   EDID plus our one extension block. Monitors usually already carry an
+   extension, so 256 + 128 = **384 bytes** is normal. Do not expect 256.
+2. **Did the driver read it?** `stat`/`cat` the connector's sysfs
+   `edid` (`/sys/class/drm/cardN-CONNECTOR/edid`). It is only the override once
+   a connector detect has happened, so a stale copy right after a write is
+   expected. Decode it with `edid-decode` and look for your timing as a
+   `DTD` line in the last CTA-861 block.
+3. **Did the driver keep the mode?** `grep WIDTHxHEIGHT
+   /sys/class/drm/cardN-CONNECTOR/modes`. If the EDID has the DTD but this
+   list does not, the driver rejected the timing (next section).
+4. **Did the compositor see it?** `kscreen-doctor -j` and look at the
+   output's `modes`. KWin only rescans a connector when it starts.
+
+### A valid-looking mode can be silently dropped for its pixel clock
+
+The override reached the kernel, sysfs showed the 384-byte EDID, `edid-decode`
+was clean, and the mode still never appeared in the connector's mode list.
+The cause was the pixel clock: standard CVT blanking for 3456x2160@60 needs
+**642 MHz**, and the monitor's HDMI Forum block advertised
+`Maximum TMDS Character Rate: 600 MHz` (its own 4K60 mode is 594 MHz). The
+NVIDIA driver discards anything over that limit without a log message.
+
+`cvt_timing()` now switches to reduced blanking (`cvt -r`) when the standard
+clock exceeds `MAX_TMDS_CLOCK_MHZ` (600), which brings the same mode to
+**481.75 MHz**. Reduced blanking only accepts multiples of 60Hz, so a request
+at another refresh keeps standard blanking, and the daemon always builds at a
+multiple of 60 anyway (`synthesis_refresh()`).
+
+To check a mode by hand: compare the `DTD` pixel clock in
+`edid-decode /sys/class/drm/cardN-CONNECTOR/edid` against the display's
+`Maximum TMDS Character Rate` line. Modes that need more than that even with
+reduced blanking are still written to the EDID and then dropped by the
+driver; the tool does not warn about this yet.
+
+### The driver only re-reads the override at a connector detect
+
+Writing `edid_override` does not change what the driver exposes. It is picked
+up the next time the connector is probed, and what triggers that matters:
+
+| Action | Refreshes the kernel's EDID and mode list? |
+| --- | --- |
+| Writing `edid_override` | No, not by itself |
+| Starting KWin (its first `drmModeGetConnector`) | Yes |
+| `echo detect > /sys/class/drm/cardN-CONNECTOR/status` (root) | Yes, on demand |
+| Toggling debugfs `force` (what `reprobe()` does) | Sends a hotplug event, but did not refresh the EDID |
+
+Even after the kernel's list is correct, a running KWin does not rescan: with
+`3456x2160` present in `.../modes`, `kscreen-doctor` still listed the old modes
+until KWin was restarted. So the supported flow is unchanged: the mode is
+persisted when first requested and appears after the next boot, when seeding
+runs before KWin. Confirmed end to end on a reboot: the seed wrote the
+saved mode, KWin listed `3456x2160` at 59.96Hz for the connector, and Sunshine
+matched it exactly instead of falling back to the nearest mode.
+
+An earlier statement here, that sysfs never reflects the override on NVIDIA,
+was too strong. It does after a detect.
+
+### Boot ordering
+
+- **Do not order the helper after `graphical.target`.** That target only
+  completes when the whole boot has finished, so anything slow or stuck holds
+  the helper back. When `plymouth quit` timed out (see below),
+  `plymouth-quit-wait` never finished, `graphical.target` stayed in
+  `start waiting`, and the helper's start job (and a manual `systemctl start`)
+  queued behind it forever. It is ordered `After=sysinit.target` for that
+  reason; it only needs debugfs and its socket, and finds the desktop session
+  when a client connects.
+- **Known issue: `plymouth quit` times out on boots that run the seed unit.**
+  Measured across three boots on the same machine (times are seconds since
+  boot): without the seed unit `plymouth-quit.service` finished in about 4.3s
+  (9.6 to 13.9). With the seed unit it timed out after 20s (about 9.4 to 29.3)
+  both when the seed toggled `force` and after that toggle was removed, so the
+  toggle is not the cause. The seed finishes just before `plymouth quit`
+  starts in both cases, and `nvidia-drm` and `fbcon` come up at the same time
+  as on the good boot. Effects: the display manager starts about 20s late, and
+  `graphical.target` never becomes active ("Bootup is not yet finished"), which
+  is why the helper must not be ordered after it. Everything else works,
+  including the mode itself. The cause is not established. The suspect is the
+  seed rewriting the connector's EDID while plymouth is still driving the
+  display. An untested mitigation is to order the seed
+  `After=plymouth-quit.service`, still `Before=display-manager.service`, so the
+  override is written once plymouth has gone and still well before KWin starts.
+  The seed also no longer toggles `force`: there is no compositor to notify at
+  that point, so it was never needed.
+- **Do not restart `plasma-kwin_wayland.service` to apply a mode.** It also
+  stops `plasma-workspace-wayland.target`, which ends the whole graphical
+  session, and the session does not come back (see above).
+
+### Writing `force` by hand
+
+`echo on > .../force` followed by `echo "$old" > .../force` fails on the
+restore: `echo` appends a newline that the kernel rejects for `unspecified`,
+which leaves the connector forced on. Use `printf` (no newline), and read the
+value back afterwards. The daemon writes without a newline and was checked to
+leave `unspecified` after a connect. To undo a stuck value:
+`printf unspecified | sudo tee /sys/kernel/debug/dri/N/CONNECTOR/force`.
 
 ## Usage
 
@@ -176,6 +283,9 @@ accepts untrusted network input directly.
   confirmed working end-to-end with a real custom resolution. The EDID
   mechanism itself is driver/compositor-agnostic, but mode-selection
   currently shells out to `kscreen-doctor`, so it's KDE-specific for now.
+- A mode whose pixel clock exceeds the port's limit (600 MHz for HDMI 2.0),
+  even with reduced blanking, is accepted into the EDID and then silently
+  dropped by the driver. See "A valid-looking mode can be silently dropped".
 - A resolution beyond what your GPU/output can physically drive will still
   fail cleanly rather than actually working - the underlying driver has the
   final say on whether it accepts a given timing, EDID or not. This is now
