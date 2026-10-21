@@ -1,6 +1,10 @@
 [Unit]
 Description=Sunshine EDID helper (appends custom resolutions requested by Moonlight clients)
-After=graphical.target
+# Deliberately NOT After=graphical.target: that target only completes once the whole boot
+# has finished, so any slow or stuck boot unit (a hung plymouth-quit-wait, say) would keep
+# this daemon from ever starting. It needs only debugfs and its socket; the desktop session
+# is looked up when a client connects, not at startup.
+After=sysinit.target
 
 [Service]
 Type=simple

@@ -425,8 +425,11 @@ def seed() -> None:
         log.info("no persisted modes for %s yet, nothing to seed", CONNECTOR)
         return
 
+    # No reprobe here: no compositor exists yet to notify, and at this point plymouth is
+    # the only thing driving the display. Toggling the connector's force file under it
+    # coincided with plymouth-quit hanging on the first boot that did so, which in turn
+    # kept graphical.target from ever completing. KWin reads the override when it starts.
     apply_modes(CONNECTOR, modes)
-    edid_lib.reprobe(CONNECTOR)
     log.info("seeded %d persisted mode(s) onto %s: %s", len(modes), CONNECTOR, ", ".join(f"{w}x{h}@{r}" for w, h, r in modes))
 
 

@@ -197,11 +197,11 @@ class SeedTest(TempStateTestCase):
         apply.assert_not_called()
         reprobe.assert_not_called()
 
-    def test_persisted_modes_are_applied_and_the_connector_reprobed(self):
+    def test_persisted_modes_are_applied_without_reprobing_the_connector(self):
         modes = [(3456, 2160, 60)]
         _, apply, reprobe = self.run_seed(modes)
         apply.assert_called_once_with(daemon.CONNECTOR, modes)
-        reprobe.assert_called_once_with(daemon.CONNECTOR)
+        reprobe.assert_not_called()
 
     def test_wait_for_connector_returns_once_the_entry_exists(self):
         with mock.patch.object(edid_lib, "find_debugfs_connector", side_effect=[RuntimeError("no"), Path("/x")]) as find, \
