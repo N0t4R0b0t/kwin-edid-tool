@@ -52,10 +52,20 @@ SOCKET_PATH = os.environ.get("SUNSHINE_EDID_HELPER_SOCKET", "/run/sunshine-edid-
 CONNECTOR = os.environ.get("SUNSHINE_EDID_HELPER_CONNECTOR", "HDMI-A-1")
 STATE_DIR = Path(os.environ.get("SUNSHINE_EDID_HELPER_STATE_DIR", "/var/lib/sunshine-edid-helper"))
 
-# Restarting KWin is the only way to get a newly-added mode discovered on drivers
-# where live reprobing doesn't work (NVIDIA). Set to 0 to just persist the mode
-# and wait for the next boot to pick it up instead.
-RESTART_KWIN = os.environ.get("SUNSHINE_EDID_HELPER_RESTART_KWIN", "1").lower() not in ("0", "false", "no")
+def env_enabled(name: str, default: bool) -> bool:
+    """Read an on/off switch from the environment ("1"/"true"/"yes" and "0"/"false"/"no")."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "")
+
+
+# Restarting KWin is the only way to get a newly-added mode discovered live on drivers
+# where reprobing doesn't work (NVIDIA), but it is OFF by default: on Plasma 6, restarting
+# plasma-kwin_wayland.service also stops plasma-workspace-wayland.target, which ends the whole
+# graphical session (every app) and the session does not come back by itself. Without it, a
+# new mode is persisted and becomes selectable at the next boot via --seed.
+RESTART_KWIN = env_enabled("SUNSHINE_EDID_HELPER_RESTART_KWIN", False)
 KWIN_UNIT = "plasma-kwin_wayland.service"
 
 # How close an existing mode's resolution/refresh needs to be to count as "already there".
@@ -206,7 +216,7 @@ def restart_kwin() -> bool:
         log.exception("can't identify the desktop session, not restarting KWin")
         return False
 
-    log.warning("restarting %s as %s - the current stream will drop, reconnect to pick up the new mode", KWIN_UNIT, user)
+    log.warning("restarting %s as %s - this ends the whole graphical session, not just the stream", KWIN_UNIT, user)
     result = subprocess.run(
         ["runuser", "-u", user, "--", "systemctl", "--user", "restart", KWIN_UNIT],
         capture_output=True, text=True, env=env,
@@ -346,7 +356,7 @@ def handle_connect(connector: str, width: int, height: int, refresh: int) -> Non
             width, height, refresh, connector, len(modes),
         )
         if not RESTART_KWIN:
-            log.warning("auto-restart disabled - %dx%d@%d becomes selectable after the next reboot", width, height, refresh)
+            log.warning("%dx%d@%d is persisted and becomes selectable after the next reboot (KWin auto-restart is off)", width, height, refresh)
             return
         if not restart_kwin():
             return

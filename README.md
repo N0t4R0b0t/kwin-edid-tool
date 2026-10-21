@@ -112,13 +112,16 @@ The daemon now closes that loop with two pieces:
    immediately.
 
 A genuinely new resolution - one never requested before on this machine -
-still can't be discovered live, so the daemon restarts KWin once (via its
-`plasma-kwin_wayland.service` user unit, letting systemd handle the handover
-rather than racing `--replace` against the session). That costs the current
-stream, happens at most once per resolution ever, and every subsequent boot
-is handled by seeding instead. Set
-`SUNSHINE_EDID_HELPER_RESTART_KWIN=0` in the unit to persist only and wait
-for the next boot.
+still can't be discovered live. It is persisted straight away and becomes
+selectable at the next boot, when seeding applies it before KWin starts.
+
+The daemon can instead restart KWin to make it usable immediately, by setting
+`SUNSHINE_EDID_HELPER_RESTART_KWIN=1` in the unit. This is **off by default**:
+on Plasma 6, restarting `plasma-kwin_wayland.service` also stops
+`plasma-workspace-wayland.target`, which ends the whole graphical session
+(every open app, not just the stream), and systemd then refuses the start job
+("Requested transaction contradicts existing jobs"), leaving you at the login
+screen. Only enable it if you accept that, once per new resolution.
 
 Note the cap: one CTA-861 extension block holds six detailed timings, so at
 most six custom modes are kept, evicting least-recently-requested first.

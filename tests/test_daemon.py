@@ -1,5 +1,6 @@
 """Tests for the Sunshine EDID helper daemon: mode matching, persistence, seeding and connect handling."""
 
+import importlib
 import io
 import json
 import logging
@@ -44,6 +45,33 @@ class TempStateTestCase(unittest.TestCase):
         patcher = mock.patch.object(daemon, "STATE_DIR", self.state)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+
+class EnvSwitchTest(unittest.TestCase):
+    def read(self, value):
+        env = {} if value is None else {"SWITCH": value}
+        with mock.patch.dict(daemon.os.environ, env, clear=True):
+            return daemon.env_enabled("SWITCH", False), daemon.env_enabled("SWITCH", True)
+
+    def test_unset_switch_falls_back_to_the_default(self):
+        self.assertEqual(self.read(None), (False, True))
+
+    def test_truthy_values_enable_the_switch(self):
+        for value in ("1", "true", "YES", " on "):
+            self.assertEqual(self.read(value), (True, True), value)
+
+    def test_falsy_values_disable_the_switch(self):
+        for value in ("0", "false", "No", ""):
+            self.assertEqual(self.read(value), (False, False), value)
+
+    def test_kwin_restart_is_off_unless_explicitly_enabled(self):
+        # Reload under a clean environment so this checks the real module default.
+        with mock.patch.dict(daemon.os.environ, {}, clear=True):
+            reloaded = importlib.reload(daemon)
+        self.assertFalse(reloaded.RESTART_KWIN)
+        with mock.patch.dict(daemon.os.environ, {"SUNSHINE_EDID_HELPER_RESTART_KWIN": "1"}):
+            self.assertTrue(importlib.reload(daemon).RESTART_KWIN)
+        importlib.reload(daemon)
 
 
 class ModeMatchingTest(unittest.TestCase):
