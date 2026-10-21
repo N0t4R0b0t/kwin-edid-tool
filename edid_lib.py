@@ -15,7 +15,6 @@ mode, so Sunshine's normal "select an already-advertised mode" path
 
 from __future__ import annotations
 
-import glob
 import re
 import subprocess
 from pathlib import Path
@@ -177,23 +176,61 @@ def append_modes_to_edid(original: bytes, modes: list[tuple[int, int, int]]) -> 
     return bytes(patched) + extension
 
 
+SYSFS_DRM_DIR = Path("/sys/class/drm")
+DEBUGFS_DRI_DIR = Path("/sys/kernel/debug/dri")
+
+
+def _sysfs_connector_dirs(connector: str) -> list[Path]:
+    """Every /sys/class/drm/card<N>-<connector> directory, with connected ones first."""
+    found = sorted(SYSFS_DRM_DIR.glob(f"card*-{connector}"))
+
+    def is_connected(path: Path) -> bool:
+        try:
+            return (path / "status").read_text().strip() == "connected"
+        except OSError:
+            return False
+
+    return sorted(found, key=lambda path: not is_connected(path))
+
+
 def find_debugfs_connector(connector: str) -> Path:
-    candidates = glob.glob(f"/sys/kernel/debug/dri/*/{connector}")
+    """Locate the debugfs directory for a connector.
+
+    Newer kernels expose the same device's debugfs under several names (the
+    card minor, the render node minor, and the PCI address), so a plain glob
+    can match one connector more than once. Aliases resolving to the same
+    directory are collapsed first; if distinct directories still remain, the
+    one belonging to the card that sysfs reports the connector on wins.
+    """
+    candidates = sorted(DEBUGFS_DRI_DIR.glob(f"*/{connector}"))
     if not candidates:
         raise RuntimeError(
-            f"no debugfs entry found for connector {connector!r} under /sys/kernel/debug/dri/*/\n"
+            f"no debugfs entry found for connector {connector!r} under {DEBUGFS_DRI_DIR}/*/\n"
             "(debugfs must be mounted, and this must run as root)"
         )
-    if len(candidates) > 1:
-        raise RuntimeError(f"multiple debugfs entries matched {connector!r}: {candidates} - pass a more specific connector name")
-    return Path(candidates[0])
+
+    unique = sorted({candidate.resolve() for candidate in candidates})
+    if len(unique) == 1:
+        return unique[0]
+
+    for sysfs_dir in _sysfs_connector_dirs(connector):
+        card = re.match(r"card(\d+)-", sysfs_dir.name)
+        if card:
+            for resolved in unique:
+                if resolved.parent.name == card.group(1):
+                    return resolved
+
+    raise RuntimeError(
+        f"multiple debugfs entries matched {connector!r}: {[str(c) for c in unique]} - "
+        "none of them belongs to a card that sysfs lists the connector on"
+    )
 
 
 def find_sysfs_edid(connector: str) -> Path:
-    candidates = glob.glob(f"/sys/class/drm/card*-{connector}/edid")
+    candidates = _sysfs_connector_dirs(connector)
     if not candidates:
-        raise RuntimeError(f"no sysfs EDID found for connector {connector!r} under /sys/class/drm/")
-    return Path(candidates[0])
+        raise RuntimeError(f"no sysfs EDID found for connector {connector!r} under {SYSFS_DRM_DIR}/")
+    return candidates[0] / "edid"
 
 
 def reprobe(connector: str) -> None:
